@@ -1,0 +1,109 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: momentum-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-momentum}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-momentum_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-momentum_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-momentum} -d ${POSTGRES_DB:-momentum_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - momentum-network
+
+  # MinIO S3-Compatible Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: momentum-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-momentum_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-momentum_secret_key}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "${MINIO_API_PORT:-9010}:9000"
+      - "${MINIO_CONSOLE_PORT:-9011}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - momentum-network
+
+  # NestJS Backend Server
+  server:
+    build:
+      context: ./momentum-server
+      dockerfile: Dockerfile.dev
+    container_name: momentum-server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-momentum}:${POSTGRES_PASSWORD:-momentum_secret}@postgres:5432/${POSTGRES_DB:-momentum_db}?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_access_secret_key_change_in_production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-your_refresh_secret_key_change_in_production}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-7d}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-momentum_admin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-momentum_secret_key}
+      MINIO_BUCKET: ${MINIO_BUCKET:-momentum-uploads}
+      MINIO_USE_SSL: "false"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_URL: ${OPENAI_API_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-grok-4-fast}
+    ports:
+      - "0.0.0.0:${SERVER_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    networks:
+      - momentum-network
+
+  # Next.js Frontend Client (Production)
+  # Используем network_mode: host для прямого доступа к сети хоста
+  # Это позволяет клиенту быть доступным из локальной сети без дополнительной настройки портов
+  client:
+    build:
+      context: ./momentum-client
+      dockerfile: Dockerfile
+      target: production
+    container_name: momentum-client
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      # Используйте IP адрес сервера вместо localhost для доступа из локальной сети
+      # Или используйте имя хоста, если настроен DNS
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+      NEXT_PUBLIC_MINIO_URL: ${NEXT_PUBLIC_MINIO_URL:-http://localhost:9010}
+    depends_on:
+      - server
+    # При network_mode: host не нужны ports и networks
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  momentum-network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"
+

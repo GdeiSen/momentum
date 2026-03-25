@@ -1,0 +1,338 @@
+// ============================================
+// Momentum - Prisma Schema
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Enums
+// ============================================
+
+enum TeamRole {
+  MEMBER
+  ADMIN
+  OWNER
+}
+
+enum HabitLogStatus {
+  COMPLETED
+  PARTIAL
+  SKIPPED_EXCUSED
+}
+
+// ============================================
+// Users
+// ============================================
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  nickname      String   @unique
+  avatarUrl     String?  @map("avatar_url")
+  bio           String?  @db.Text
+  headerBgUrl   String?  @map("header_bg_url")
+  nicknameChangedAt DateTime? @map("nickname_changed_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  sessions      Session[]
+  ownedTeams    Team[]        @relation("TeamOwner")
+  teamMembers   TeamMember[]
+  habitLogs     HabitLog[]
+  messages      Message[]
+  posts         Post[]
+  dashboard     UserDashboard?
+  settings      UserSettings?
+
+  @@map("users")
+}
+
+// ============================================
+// Sessions (Auth)
+// ============================================
+
+model Session {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  refreshToken String   @map("refresh_token")
+  userAgent    String?  @map("user_agent")
+  ipAddress    String?  @map("ip_address")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@map("sessions")
+}
+
+// ============================================
+// Teams
+// ============================================
+
+model Team {
+  id                    String   @id @default(uuid()) @db.Uuid
+  name                  String
+  slogan                String?
+  description           String?  @db.Text
+  headerBgUrl           String?  @map("header_bg_url")
+  ownerId               String   @map("owner_id") @db.Uuid
+  isPrivate             Boolean  @default(false) @map("is_private")
+  requireInviteCode     Boolean  @default(false) @map("require_invite_code")
+  requireEmailWhitelist Boolean  @default(false) @map("require_email_whitelist")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  owner           User                 @relation("TeamOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members         TeamMember[]
+  challenges      Challenge[]
+  chat            Chat?
+  posts           Post[]
+  invites         TeamInvite[]
+  whitelistEmails TeamWhitelistEmail[]
+
+  @@index([ownerId])
+  @@map("teams")
+}
+
+// ============================================
+// Team Invites (Invite Codes)
+// ============================================
+
+model TeamInvite {
+  id        String    @id @default(uuid()) @db.Uuid
+  teamId    String    @map("team_id") @db.Uuid
+  code      String    @unique
+  maxUses   Int?      @map("max_uses")
+  usedCount Int       @default(0) @map("used_count")
+  expiresAt DateTime? @map("expires_at")
+  isActive  Boolean   @default(true) @map("is_active")
+  createdBy String    @map("created_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([code])
+  @@map("team_invites")
+}
+
+// ============================================
+// Team Whitelist Emails
+// ============================================
+
+model TeamWhitelistEmail {
+  id        String   @id @default(uuid()) @db.Uuid
+  teamId    String   @map("team_id") @db.Uuid
+  email     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, email])
+  @@index([teamId])
+  @@index([email])
+  @@map("team_whitelist_emails")
+}
+
+// ============================================
+// Team Members (Many-to-Many)
+// ============================================
+
+model TeamMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  teamId    String   @map("team_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  role      TeamRole @default(MEMBER)
+  isBlocked Boolean  @default(false) @map("is_blocked")
+  joinedAt  DateTime @default(now()) @map("joined_at")
+
+  // Relations
+  team     Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([teamId])
+  @@index([userId])
+  @@map("team_members")
+}
+
+// ============================================
+// Challenges (Seasons/Events)
+// ============================================
+
+model Challenge {
+  id          String   @id @default(uuid()) @db.Uuid
+  teamId      String   @map("team_id") @db.Uuid
+  title       String
+  description String?  @db.Text
+  posterUrl   String?  @map("poster_url")
+  startDate   DateTime @map("start_date") @db.Date
+  endDate     DateTime @map("end_date") @db.Date
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  habits      Habit[]
+
+  @@index([teamId])
+  @@index([startDate, endDate])
+  @@map("challenges")
+}
+
+// ============================================
+// Habits (Actions within Challenges)
+// ============================================
+
+model Habit {
+  id          String   @id @default(uuid()) @db.Uuid
+  challengeId String   @map("challenge_id") @db.Uuid
+  title       String
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  challenge   Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  logs        HabitLog[]
+
+  @@index([challengeId])
+  @@map("habits")
+}
+
+// ============================================
+// Habit Logs (Completion Records)
+// ============================================
+
+model HabitLog {
+  id       String         @id @default(uuid()) @db.Uuid
+  habitId  String         @map("habit_id") @db.Uuid
+  userId   String         @map("user_id") @db.Uuid
+  date     DateTime       @db.Date
+  status   HabitLogStatus
+  note     String?        @db.Text
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  habit    Habit          @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([habitId, userId, date])
+  @@index([habitId])
+  @@index([userId])
+  @@index([date])
+  @@map("habit_logs")
+}
+
+// ============================================
+// Chats
+// ============================================
+
+model Chat {
+  id        String   @id @default(uuid()) @db.Uuid
+  teamId    String   @unique @map("team_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@map("chats")
+}
+
+// ============================================
+// Messages
+// ============================================
+
+model Message {
+  id        String   @id @default(uuid()) @db.Uuid
+  chatId    String   @map("chat_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  content   String   @db.Text
+  mediaUrl  String?  @map("media_url")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+// ============================================
+// User Dashboards (Widget Configuration)
+// ============================================
+
+model UserDashboard {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @unique @map("user_id") @db.Uuid
+  layoutConfig Json     @default("[]") @map("layout_config") @db.JsonB
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_dashboards")
+}
+
+// ============================================
+// Posts (Team Posts/Announcements)
+// ============================================
+
+model Post {
+  id        String   @id @default(uuid()) @db.Uuid
+  teamId    String   @map("team_id") @db.Uuid
+  authorId  String   @map("author_id") @db.Uuid
+  title     String
+  content   String   @db.Text
+  mediaUrls Json     @default("[]") @map("media_urls") @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([authorId])
+  @@index([createdAt])
+  @@map("posts")
+}
+
+// ============================================
+// User Settings (Preferences)
+// ============================================
+
+model UserSettings {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  settings  Json     @map("settings") @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
