@@ -10,17 +10,26 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-import { TeamRole } from '@prisma/client';
 import { TeamsService } from './teams.service';
 import { TeamMembersService } from './team-members.service';
 import { TeamInvitesService } from './team-invites.service';
 import { TeamWhitelistService } from './team-whitelist.service';
+import { TeamRoleTemplatesService } from './team-role-templates.service';
+import { TeamPermissionsService } from './team-permissions.service';
+import { TeamChannelsService } from './team-channels.service';
+import { TeamChannelMessagesService } from './team-channel-messages.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { UpdateMemberRoleDto } from './dto/update-member-role.dto';
 import { TransferOwnershipDto } from './dto/transfer-ownership.dto';
-import { CreateTeamInviteDto, JoinWithInviteCodeDto } from './dto/team-invite.dto';
+import { CreateTeamInviteDto } from './dto/team-invite.dto';
 import { AddWhitelistEmailDto, AddBulkWhitelistEmailsDto } from './dto/team-whitelist.dto';
+import { CreateRoleTemplateDto } from './dto/create-role-template.dto';
+import { UpdateRoleTemplateDto } from './dto/update-role-template.dto';
+import { AssignRoleTemplateDto } from './dto/assign-role-template.dto';
+import { CreateTeamChannelDto } from './dto/create-team-channel.dto';
+import { UpdateTeamChannelDto } from './dto/update-team-channel.dto';
+import { CreateTeamChannelMessageDto } from './dto/create-team-channel-message.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -35,6 +44,10 @@ export class TeamsController {
     private readonly teamMembersService: TeamMembersService,
     private readonly teamInvitesService: TeamInvitesService,
     private readonly teamWhitelistService: TeamWhitelistService,
+    private readonly teamRoleTemplatesService: TeamRoleTemplatesService,
+    private readonly teamPermissionsService: TeamPermissionsService,
+    private readonly teamChannelsService: TeamChannelsService,
+    private readonly teamChannelMessagesService: TeamChannelMessagesService,
   ) {}
 
   @UseGuards(JwtAuthGuard)
@@ -143,6 +156,224 @@ export class TeamsController {
     return this.teamsService.getActivityData(teamId, scope, new Date(referenceDate), user?.id);
   }
 
+  // ============================================
+  // Team RBAC Endpoints
+  // ============================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':teamId/permissions/me')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get effective permissions for current user in team' })
+  @ApiResponse({ status: 200, description: 'Permission snapshot' })
+  async getMyPermissions(
+    @Param('teamId') teamId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamPermissionsService.getPermissionSnapshot(teamId, user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':teamId/roles/templates')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get all role templates in a team' })
+  @ApiResponse({ status: 200, description: 'Role templates list' })
+  async getRoleTemplates(
+    @Param('teamId') teamId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamRoleTemplatesService.listTemplates(teamId, user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':teamId/roles/templates')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Create custom role template (requires roles.manage)' })
+  @ApiResponse({ status: 201, description: 'Role template created' })
+  async createRoleTemplate(
+    @Param('teamId') teamId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() createRoleTemplateDto: CreateRoleTemplateDto,
+  ) {
+    return this.teamRoleTemplatesService.createTemplate(
+      teamId,
+      user.id,
+      createRoleTemplateDto,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':teamId/roles/templates/:roleTemplateId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update custom role template (requires roles.manage)' })
+  @ApiResponse({ status: 200, description: 'Role template updated' })
+  async updateRoleTemplate(
+    @Param('teamId') teamId: string,
+    @Param('roleTemplateId') roleTemplateId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() updateRoleTemplateDto: UpdateRoleTemplateDto,
+  ) {
+    return this.teamRoleTemplatesService.updateTemplate(
+      teamId,
+      roleTemplateId,
+      user.id,
+      updateRoleTemplateDto,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':teamId/roles/templates/:roleTemplateId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Delete custom role template (requires roles.manage)' })
+  @ApiResponse({ status: 200, description: 'Role template deleted' })
+  async deleteRoleTemplate(
+    @Param('teamId') teamId: string,
+    @Param('roleTemplateId') roleTemplateId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamRoleTemplatesService.deleteTemplate(
+      teamId,
+      roleTemplateId,
+      user.id,
+    );
+  }
+
+  // ============================================
+  // Team Channels Endpoints
+  // ============================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':teamId/channels')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get channels in a team' })
+  @ApiResponse({ status: 200, description: 'Team channels list' })
+  async getChannels(
+    @Param('teamId') teamId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamChannelsService.list(teamId, user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':teamId/channels')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Create team channel (requires channels.create)' })
+  @ApiResponse({ status: 201, description: 'Channel created' })
+  async createChannel(
+    @Param('teamId') teamId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() createTeamChannelDto: CreateTeamChannelDto,
+  ) {
+    return this.teamChannelsService.create(teamId, user.id, createTeamChannelDto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':teamId/channels/:channelId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get team channel by ID' })
+  @ApiResponse({ status: 200, description: 'Channel details' })
+  async getChannelById(
+    @Param('teamId') teamId: string,
+    @Param('channelId') channelId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamChannelsService.getById(teamId, channelId, user.id);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':teamId/channels/:channelId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Update team channel (requires channels.manage)' })
+  @ApiResponse({ status: 200, description: 'Channel updated' })
+  async updateChannel(
+    @Param('teamId') teamId: string,
+    @Param('channelId') channelId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() updateTeamChannelDto: UpdateTeamChannelDto,
+  ) {
+    return this.teamChannelsService.update(
+      teamId,
+      channelId,
+      user.id,
+      updateTeamChannelDto,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':teamId/channels/:channelId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Delete team channel (requires channels.manage)' })
+  @ApiResponse({ status: 200, description: 'Channel deleted' })
+  async deleteChannel(
+    @Param('teamId') teamId: string,
+    @Param('channelId') channelId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamChannelsService.delete(teamId, channelId, user.id);
+  }
+
+  // ============================================
+  // Team Channel Messages Endpoints
+  // ============================================
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':teamId/channels/:channelId/messages')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get messages in team channel' })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Channel messages list' })
+  async getChannelMessages(
+    @Param('teamId') teamId: string,
+    @Param('channelId') channelId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    return this.teamChannelMessagesService.list(
+      teamId,
+      channelId,
+      user.id,
+      parsedLimit,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':teamId/channels/:channelId/messages')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Send message to team channel' })
+  @ApiResponse({ status: 201, description: 'Channel message created' })
+  async createChannelMessage(
+    @Param('teamId') teamId: string,
+    @Param('channelId') channelId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() createTeamChannelMessageDto: CreateTeamChannelMessageDto,
+  ) {
+    return this.teamChannelMessagesService.create(
+      teamId,
+      channelId,
+      user.id,
+      createTeamChannelMessageDto,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':teamId/channels/:channelId/messages/:messageId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Delete team channel message' })
+  @ApiResponse({ status: 200, description: 'Channel message deleted' })
+  async deleteChannelMessage(
+    @Param('teamId') teamId: string,
+    @Param('channelId') channelId: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamChannelMessagesService.delete(
+      teamId,
+      channelId,
+      messageId,
+      user.id,
+    );
+  }
+
   // Member management endpoints
 
   @UseGuards(OptionalJwtAuthGuard)
@@ -216,6 +447,61 @@ export class TeamsController {
     @Param('userId') userId: string,
   ) {
     return this.teamMembersService.getMemberStatistics(teamId, userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':teamId/members/:userId/permissions')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Get member effective permissions and assigned templates' })
+  @ApiResponse({ status: 200, description: 'Member permission snapshot' })
+  async getMemberPermissionSnapshot(
+    @Param('teamId') teamId: string,
+    @Param('userId') targetUserId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamRoleTemplatesService.getMemberPermissionSnapshot(
+      teamId,
+      targetUserId,
+      user.id,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':teamId/members/:userId/roles')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Assign role template to member (requires roles.assign)' })
+  @ApiResponse({ status: 201, description: 'Role template assigned to member' })
+  async assignRoleTemplateToMember(
+    @Param('teamId') teamId: string,
+    @Param('userId') targetUserId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() assignRoleTemplateDto: AssignRoleTemplateDto,
+  ) {
+    return this.teamRoleTemplatesService.assignTemplateToMember(
+      teamId,
+      targetUserId,
+      assignRoleTemplateDto.roleTemplateId,
+      user.id,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':teamId/members/:userId/roles/:roleTemplateId')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: 'Unassign role template from member (requires roles.assign)' })
+  @ApiResponse({ status: 200, description: 'Role template unassigned from member' })
+  async unassignRoleTemplateFromMember(
+    @Param('teamId') teamId: string,
+    @Param('userId') targetUserId: string,
+    @Param('roleTemplateId') roleTemplateId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.teamRoleTemplatesService.unassignTemplateFromMember(
+      teamId,
+      targetUserId,
+      roleTemplateId,
+      user.id,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -392,4 +678,3 @@ export class TeamsController {
     return this.teamWhitelistService.removeWhitelistEmail(teamId, whitelistId, user.id);
   }
 }
-

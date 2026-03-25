@@ -27,31 +27,52 @@ enum HabitLogStatus {
   SKIPPED_EXCUSED
 }
 
+enum WorkoutType {
+  STRENGTH
+  CARDIO
+  MOBILITY
+  HIIT
+  SPORTS
+  OTHER
+}
+
+enum WorkoutLogStatus {
+  COMPLETED
+  PARTIAL
+  SKIPPED
+}
+
 // ============================================
 // Users
 // ============================================
 
 model User {
-  id            String   @id @default(uuid()) @db.Uuid
-  email         String   @unique
-  passwordHash  String   @map("password_hash")
-  nickname      String   @unique
-  avatarUrl     String?  @map("avatar_url")
-  bio           String?  @db.Text
-  headerBgUrl   String?  @map("header_bg_url")
+  id                String    @id @default(uuid()) @db.Uuid
+  email             String    @unique
+  passwordHash      String    @map("password_hash")
+  nickname          String    @unique
+  avatarUrl         String?   @map("avatar_url")
+  bio               String?   @db.Text
+  headerBgUrl       String?   @map("header_bg_url")
   nicknameChangedAt DateTime? @map("nickname_changed_at")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  sessions      Session[]
-  ownedTeams    Team[]        @relation("TeamOwner")
-  teamMembers   TeamMember[]
-  habitLogs     HabitLog[]
-  messages      Message[]
-  posts         Post[]
-  dashboard     UserDashboard?
-  settings      UserSettings?
+  sessions             Session[]
+  ownedTeams           Team[]                     @relation("TeamOwner")
+  teamMembers          TeamMember[]
+  habitLogs            HabitLog[]
+  messages             Message[]
+  createdTeamChannels  TeamChannel[]              @relation("TeamChannelCreator")
+  teamChannelMessages  TeamChannelMessage[]
+  createdWorkouts      Workout[]                  @relation("WorkoutCreator")
+  workoutLogs          WorkoutLog[]
+  posts                Post[]
+  dashboard            UserDashboard?
+  settings             UserSettings?
+  createdRoleTemplates TeamRoleTemplate[]         @relation("RoleTemplateCreator")
+  assignedMemberRoles  TeamMemberRoleAssignment[] @relation("RoleAssignmentCreator")
 
   @@map("users")
 }
@@ -70,7 +91,7 @@ model Session {
   createdAt    DateTime @default(now()) @map("created_at")
 
   // Relations
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([refreshToken])
@@ -99,9 +120,12 @@ model Team {
   members         TeamMember[]
   challenges      Challenge[]
   chat            Chat?
+  channels        TeamChannel[]
+  workouts        Workout[]
   posts           Post[]
   invites         TeamInvite[]
   whitelistEmails TeamWhitelistEmail[]
+  roleTemplates   TeamRoleTemplate[]
 
   @@index([ownerId])
   @@map("teams")
@@ -162,13 +186,186 @@ model TeamMember {
   joinedAt  DateTime @default(now()) @map("joined_at")
 
   // Relations
-  team     Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team            Team                       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user            User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roleAssignments TeamMemberRoleAssignment[]
 
   @@unique([teamId, userId])
   @@index([teamId])
   @@index([userId])
   @@map("team_members")
+}
+
+// ============================================
+// Team RBAC Foundation
+// ============================================
+
+model Permission {
+  code        String   @id
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  rolePermissions TeamRolePermission[]
+
+  @@map("permissions")
+}
+
+model TeamRoleTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  teamId      String   @map("team_id") @db.Uuid
+  name        String
+  description String?  @db.Text
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  team              Team                       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator           User                       @relation("RoleTemplateCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  permissions       TeamRolePermission[]
+  memberAssignments TeamMemberRoleAssignment[]
+
+  @@unique([teamId, name])
+  @@index([teamId])
+  @@index([createdBy])
+  @@map("team_role_templates")
+}
+
+model TeamRolePermission {
+  id             String   @id @default(uuid()) @db.Uuid
+  roleTemplateId String   @map("role_template_id") @db.Uuid
+  permissionCode String   @map("permission_code")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  // Relations
+  roleTemplate TeamRoleTemplate @relation(fields: [roleTemplateId], references: [id], onDelete: Cascade)
+  permission   Permission       @relation(fields: [permissionCode], references: [code], onDelete: Cascade)
+
+  @@unique([roleTemplateId, permissionCode])
+  @@index([roleTemplateId])
+  @@index([permissionCode])
+  @@map("team_role_permissions")
+}
+
+model TeamMemberRoleAssignment {
+  id             String   @id @default(uuid()) @db.Uuid
+  teamMemberId   String   @map("team_member_id") @db.Uuid
+  roleTemplateId String   @map("role_template_id") @db.Uuid
+  assignedBy     String   @map("assigned_by") @db.Uuid
+  assignedAt     DateTime @default(now()) @map("assigned_at")
+
+  // Relations
+  teamMember   TeamMember       @relation(fields: [teamMemberId], references: [id], onDelete: Cascade)
+  roleTemplate TeamRoleTemplate @relation(fields: [roleTemplateId], references: [id], onDelete: Cascade)
+  assigner     User             @relation("RoleAssignmentCreator", fields: [assignedBy], references: [id], onDelete: Cascade)
+
+  @@unique([teamMemberId, roleTemplateId])
+  @@index([teamMemberId])
+  @@index([roleTemplateId])
+  @@index([assignedBy])
+  @@map("team_member_role_assignments")
+}
+
+// ============================================
+// Team Channels (Workspace Channels Foundation)
+// ============================================
+
+model TeamChannel {
+  id          String   @id @default(uuid()) @db.Uuid
+  teamId      String   @map("team_id") @db.Uuid
+  name        String
+  slug        String
+  description String?  @db.Text
+  isDefault   Boolean  @default(false) @map("is_default")
+  isArchived  Boolean  @default(false) @map("is_archived")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  team     Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator  User                 @relation("TeamChannelCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  messages TeamChannelMessage[]
+
+  @@unique([teamId, slug])
+  @@index([teamId])
+  @@index([createdBy])
+  @@index([isArchived])
+  @@map("team_channels")
+}
+
+model TeamChannelMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  channelId String   @map("channel_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  content   String   @db.Text
+  mediaUrl  String?  @map("media_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  channel TeamChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([channelId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("team_channel_messages")
+}
+
+// ============================================
+// Workouts (Training Tracking Foundation)
+// ============================================
+
+model Workout {
+  id              String      @id @default(uuid()) @db.Uuid
+  teamId          String      @map("team_id") @db.Uuid
+  createdBy       String      @map("created_by") @db.Uuid
+  title           String
+  description     String?     @db.Text
+  type            WorkoutType @default(OTHER)
+  scheduledDate   DateTime?   @map("scheduled_date") @db.Date
+  durationMinutes Int?        @map("duration_minutes")
+  caloriesTarget  Int?        @map("calories_target")
+  isArchived      Boolean     @default(false) @map("is_archived")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  team    Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator User         @relation("WorkoutCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  logs    WorkoutLog[]
+
+  @@index([teamId])
+  @@index([createdBy])
+  @@index([scheduledDate])
+  @@index([isArchived])
+  @@map("workouts")
+}
+
+model WorkoutLog {
+  id              String           @id @default(uuid()) @db.Uuid
+  workoutId       String           @map("workout_id") @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+  status          WorkoutLogStatus @default(COMPLETED)
+  durationMinutes Int?             @map("duration_minutes")
+  caloriesBurned  Int?             @map("calories_burned")
+  distanceMeters  Int?             @map("distance_meters")
+  notes           String?          @db.Text
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  workout Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workoutId, userId])
+  @@index([workoutId])
+  @@index([userId])
+  @@index([status])
+  @@map("workout_logs")
 }
 
 // ============================================
@@ -187,8 +384,8 @@ model Challenge {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   // Relations
-  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  habits      Habit[]
+  team   Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  habits Habit[]
 
   @@index([teamId])
   @@index([startDate, endDate])
@@ -208,8 +405,8 @@ model Habit {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   // Relations
-  challenge   Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
-  logs        HabitLog[]
+  challenge Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  logs      HabitLog[]
 
   @@index([challengeId])
   @@map("habits")
@@ -220,18 +417,18 @@ model Habit {
 // ============================================
 
 model HabitLog {
-  id       String         @id @default(uuid()) @db.Uuid
-  habitId  String         @map("habit_id") @db.Uuid
-  userId   String         @map("user_id") @db.Uuid
-  date     DateTime       @db.Date
-  status   HabitLogStatus
-  note     String?        @db.Text
-  createdAt DateTime      @default(now()) @map("created_at")
-  updatedAt DateTime      @updatedAt @map("updated_at")
+  id        String         @id @default(uuid()) @db.Uuid
+  habitId   String         @map("habit_id") @db.Uuid
+  userId    String         @map("user_id") @db.Uuid
+  date      DateTime       @db.Date
+  status    HabitLogStatus
+  note      String?        @db.Text
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
 
   // Relations
-  habit    Habit          @relation(fields: [habitId], references: [id], onDelete: Cascade)
-  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  habit Habit @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([habitId, userId, date])
   @@index([habitId])
@@ -250,8 +447,8 @@ model Chat {
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  messages  Message[]
+  team     Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  messages Message[]
 
   @@map("chats")
 }
@@ -269,8 +466,8 @@ model Message {
   createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
-  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([chatId])
   @@index([userId])
@@ -290,7 +487,7 @@ model UserDashboard {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   // Relations
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_dashboards")
 }
@@ -310,8 +507,8 @@ model Post {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  team   Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
 
   @@index([teamId])
   @@index([authorId])
@@ -331,8 +528,7 @@ model UserSettings {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   // Relations
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_settings")
 }
-

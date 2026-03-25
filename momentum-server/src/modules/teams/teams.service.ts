@@ -9,6 +9,48 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TeamMembersService } from './team-members.service';
+import { TeamChannelsService } from './team-channels.service';
+
+const BASELINE_PERMISSIONS: Array<{ code: string; description: string }> = [
+  { code: 'roles.manage', description: 'Create, update and delete custom role templates.' },
+  { code: 'roles.assign', description: 'Assign and unassign role templates to team members.' },
+  { code: 'permissions.view', description: 'View effective permissions in a team.' },
+  { code: 'channels.create', description: 'Create team channels.' },
+  { code: 'channels.manage', description: 'Manage team channels and access rules.' },
+  { code: 'messages.moderate', description: 'Moderate team messages.' },
+  { code: 'workouts.manage', description: 'Create, update and delete team workouts.' },
+  { code: 'workouts.log', description: 'Log personal workout results in a team.' },
+  { code: 'members.invite', description: 'Invite users into team.' },
+  { code: 'members.remove', description: 'Remove members from team.' },
+  { code: 'members.block', description: 'Block and unblock team members.' },
+  { code: 'posts.create', description: 'Create posts in team feed.' },
+  { code: 'posts.moderate', description: 'Moderate team posts.' },
+  { code: 'workspace.update', description: 'Update workspace/team settings.' },
+  { code: 'workspace.analytics.view', description: 'View team analytics and statistics.' },
+];
+
+const SYSTEM_OWNER_ROLE = 'OWNER_SYSTEM';
+const SYSTEM_ADMIN_ROLE = 'ADMIN_SYSTEM';
+const SYSTEM_MEMBER_ROLE = 'MEMBER_SYSTEM';
+
+const SYSTEM_ADMIN_PERMISSION_CODES = [
+  'workspace.update',
+  'workspace.analytics.view',
+  'members.invite',
+  'members.remove',
+  'members.block',
+  'posts.create',
+  'posts.moderate',
+  'channels.create',
+  'channels.manage',
+  'messages.moderate',
+  'workouts.manage',
+  'workouts.log',
+  'permissions.view',
+  'roles.assign',
+];
+
+const SYSTEM_MEMBER_PERMISSION_CODES = ['posts.create', 'workouts.log'];
 
 /**
  * Service for managing teams.
@@ -18,6 +60,7 @@ export class TeamsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly teamMembersService: TeamMembersService,
+    private readonly teamChannelsService: TeamChannelsService,
   ) {}
 
   /**
@@ -76,7 +119,139 @@ export class TeamsService {
       },
     });
 
+    const ownerMember = team.members.find((member) => member.userId === userId);
+    if (ownerMember) {
+      await this.ensureTeamRbacFoundation(team.id, userId, ownerMember.id);
+    }
+    await this.teamChannelsService.ensureDefaultChannels(team.id, userId);
+
     return team;
+  }
+
+  private async ensureTeamRbacFoundation(
+    teamId: string,
+    ownerId: string,
+    ownerMemberId: string,
+  ) {
+    for (const permission of BASELINE_PERMISSIONS) {
+      await this.prisma.permission.upsert({
+        where: { code: permission.code },
+        update: { description: permission.description },
+        create: {
+          code: permission.code,
+          description: permission.description,
+        },
+      });
+    }
+
+    const ownerTemplate = await this.prisma.teamRoleTemplate.upsert({
+      where: {
+        teamId_name: {
+          teamId,
+          name: SYSTEM_OWNER_ROLE,
+        },
+      },
+      update: {
+        isSystem: true,
+      },
+      create: {
+        teamId,
+        name: SYSTEM_OWNER_ROLE,
+        description: 'System owner role template',
+        isSystem: true,
+        createdBy: ownerId,
+      },
+      select: { id: true },
+    });
+
+    const adminTemplate = await this.prisma.teamRoleTemplate.upsert({
+      where: {
+        teamId_name: {
+          teamId,
+          name: SYSTEM_ADMIN_ROLE,
+        },
+      },
+      update: {
+        isSystem: true,
+      },
+      create: {
+        teamId,
+        name: SYSTEM_ADMIN_ROLE,
+        description: 'System admin role template',
+        isSystem: true,
+        createdBy: ownerId,
+      },
+      select: { id: true },
+    });
+
+    const memberTemplate = await this.prisma.teamRoleTemplate.upsert({
+      where: {
+        teamId_name: {
+          teamId,
+          name: SYSTEM_MEMBER_ROLE,
+        },
+      },
+      update: {
+        isSystem: true,
+      },
+      create: {
+        teamId,
+        name: SYSTEM_MEMBER_ROLE,
+        description: 'System member role template',
+        isSystem: true,
+        createdBy: ownerId,
+      },
+      select: { id: true },
+    });
+
+    await this.syncTemplatePermissions(
+      ownerTemplate.id,
+      BASELINE_PERMISSIONS.map((permission) => permission.code),
+    );
+    await this.syncTemplatePermissions(adminTemplate.id, SYSTEM_ADMIN_PERMISSION_CODES);
+    await this.syncTemplatePermissions(memberTemplate.id, SYSTEM_MEMBER_PERMISSION_CODES);
+
+    await this.prisma.teamMemberRoleAssignment.upsert({
+      where: {
+        teamMemberId_roleTemplateId: {
+          teamMemberId: ownerMemberId,
+          roleTemplateId: ownerTemplate.id,
+        },
+      },
+      update: {},
+      create: {
+        teamMemberId: ownerMemberId,
+        roleTemplateId: ownerTemplate.id,
+        assignedBy: ownerId,
+      },
+    });
+  }
+
+  private async syncTemplatePermissions(roleTemplateId: string, permissionCodes: string[]) {
+    await this.prisma.teamRolePermission.deleteMany({
+      where: {
+        roleTemplateId,
+        permissionCode: {
+          notIn: permissionCodes,
+        },
+      },
+    });
+
+    for (const permissionCode of permissionCodes) {
+      await this.prisma.teamRolePermission.upsert({
+        where: {
+          roleTemplateId_permissionCode: {
+            roleTemplateId,
+            permissionCode,
+          },
+        },
+        update: {},
+        create: {
+          roleTemplateId,
+          permissionCode,
+        },
+      });
+    }
   }
 
   /**
@@ -721,4 +896,3 @@ export class TeamsService {
     return result;
   }
 }
-

@@ -1,4 +1,10 @@
-import { PrismaClient, TeamRole, HabitLogStatus } from '@prisma/client';
+import {
+  PrismaClient,
+  TeamRole,
+  HabitLogStatus,
+  WorkoutType,
+  WorkoutLogStatus,
+} from '@prisma/client';
 import * as argon2 from 'argon2';
 
 const prisma = new PrismaClient();
@@ -62,7 +68,7 @@ async function main() {
   console.log('✅ Created demo team');
 
   // Add team members
-  await prisma.teamMember.upsert({
+  const ownerMember = await prisma.teamMember.upsert({
     where: { teamId_userId: { teamId: team.id, userId: user1.id } },
     update: {},
     create: {
@@ -72,7 +78,7 @@ async function main() {
     },
   });
 
-  await prisma.teamMember.upsert({
+  const adminMember = await prisma.teamMember.upsert({
     where: { teamId_userId: { teamId: team.id, userId: user2.id } },
     update: {},
     create: {
@@ -82,7 +88,7 @@ async function main() {
     },
   });
 
-  await prisma.teamMember.upsert({
+  const basicMember = await prisma.teamMember.upsert({
     where: { teamId_userId: { teamId: team.id, userId: user3.id } },
     update: {},
     create: {
@@ -93,6 +99,288 @@ async function main() {
   });
 
   console.log('✅ Added team members');
+
+  // Seed baseline permissions
+  const permissionDefinitions: Array<{ code: string; description: string }> = [
+    { code: 'roles.manage', description: 'Create, update and delete custom role templates.' },
+    { code: 'roles.assign', description: 'Assign and unassign role templates to team members.' },
+    { code: 'permissions.view', description: 'View effective permissions in a team.' },
+    { code: 'channels.create', description: 'Create team channels.' },
+    { code: 'channels.manage', description: 'Manage team channels and access rules.' },
+    { code: 'messages.moderate', description: 'Moderate team messages.' },
+    { code: 'workouts.manage', description: 'Create, update and delete team workouts.' },
+    { code: 'workouts.log', description: 'Log personal workout results in a team.' },
+    { code: 'members.invite', description: 'Invite users into team.' },
+    { code: 'members.remove', description: 'Remove members from team.' },
+    { code: 'members.block', description: 'Block and unblock team members.' },
+    { code: 'posts.create', description: 'Create posts in team feed.' },
+    { code: 'posts.moderate', description: 'Moderate team posts.' },
+    { code: 'workspace.update', description: 'Update workspace/team settings.' },
+    { code: 'workspace.analytics.view', description: 'View team analytics and statistics.' },
+  ];
+
+  for (const permission of permissionDefinitions) {
+    await prisma.permission.upsert({
+      where: { code: permission.code },
+      update: { description: permission.description },
+      create: {
+        code: permission.code,
+        description: permission.description,
+      },
+    });
+  }
+
+  const ownerRoleTemplate = await prisma.teamRoleTemplate.upsert({
+    where: {
+      teamId_name: {
+        teamId: team.id,
+        name: 'OWNER_SYSTEM',
+      },
+    },
+    update: {
+      description: 'System owner role template',
+      isSystem: true,
+    },
+    create: {
+      teamId: team.id,
+      name: 'OWNER_SYSTEM',
+      description: 'System owner role template',
+      isSystem: true,
+      createdBy: user1.id,
+    },
+  });
+
+  const adminRoleTemplate = await prisma.teamRoleTemplate.upsert({
+    where: {
+      teamId_name: {
+        teamId: team.id,
+        name: 'ADMIN_SYSTEM',
+      },
+    },
+    update: {
+      description: 'System admin role template',
+      isSystem: true,
+    },
+    create: {
+      teamId: team.id,
+      name: 'ADMIN_SYSTEM',
+      description: 'System admin role template',
+      isSystem: true,
+      createdBy: user1.id,
+    },
+  });
+
+  const memberRoleTemplate = await prisma.teamRoleTemplate.upsert({
+    where: {
+      teamId_name: {
+        teamId: team.id,
+        name: 'MEMBER_SYSTEM',
+      },
+    },
+    update: {
+      description: 'System member role template',
+      isSystem: true,
+    },
+    create: {
+      teamId: team.id,
+      name: 'MEMBER_SYSTEM',
+      description: 'System member role template',
+      isSystem: true,
+      createdBy: user1.id,
+    },
+  });
+
+  const ownerPermissionCodes = permissionDefinitions.map((permission) => permission.code);
+  const adminPermissionCodes = [
+    'workspace.update',
+    'workspace.analytics.view',
+    'members.invite',
+    'members.remove',
+    'members.block',
+    'posts.create',
+    'posts.moderate',
+    'channels.create',
+    'channels.manage',
+    'messages.moderate',
+    'workouts.manage',
+    'workouts.log',
+    'permissions.view',
+    'roles.assign',
+  ];
+  const memberPermissionCodes = ['posts.create', 'workouts.log'];
+
+  const templatePermissionMatrix = [
+    { templateId: ownerRoleTemplate.id, permissionCodes: ownerPermissionCodes },
+    { templateId: adminRoleTemplate.id, permissionCodes: adminPermissionCodes },
+    { templateId: memberRoleTemplate.id, permissionCodes: memberPermissionCodes },
+  ];
+
+  for (const entry of templatePermissionMatrix) {
+    for (const permissionCode of entry.permissionCodes) {
+      await prisma.teamRolePermission.upsert({
+        where: {
+          roleTemplateId_permissionCode: {
+            roleTemplateId: entry.templateId,
+            permissionCode,
+          },
+        },
+        update: {},
+        create: {
+          roleTemplateId: entry.templateId,
+          permissionCode,
+        },
+      });
+    }
+  }
+
+  await prisma.teamMemberRoleAssignment.upsert({
+    where: {
+      teamMemberId_roleTemplateId: {
+        teamMemberId: ownerMember.id,
+        roleTemplateId: ownerRoleTemplate.id,
+      },
+    },
+    update: {},
+    create: {
+      teamMemberId: ownerMember.id,
+      roleTemplateId: ownerRoleTemplate.id,
+      assignedBy: user1.id,
+    },
+  });
+
+  await prisma.teamMemberRoleAssignment.upsert({
+    where: {
+      teamMemberId_roleTemplateId: {
+        teamMemberId: adminMember.id,
+        roleTemplateId: adminRoleTemplate.id,
+      },
+    },
+    update: {},
+    create: {
+      teamMemberId: adminMember.id,
+      roleTemplateId: adminRoleTemplate.id,
+      assignedBy: user1.id,
+    },
+  });
+
+  await prisma.teamMemberRoleAssignment.upsert({
+    where: {
+      teamMemberId_roleTemplateId: {
+        teamMemberId: basicMember.id,
+        roleTemplateId: memberRoleTemplate.id,
+      },
+    },
+    update: {},
+    create: {
+      teamMemberId: basicMember.id,
+      roleTemplateId: memberRoleTemplate.id,
+      assignedBy: user1.id,
+    },
+  });
+
+  console.log('✅ Seeded team RBAC baseline');
+
+  await prisma.teamChannel.upsert({
+    where: {
+      teamId_slug: {
+        teamId: team.id,
+        slug: 'general',
+      },
+    },
+    update: {
+      isDefault: true,
+      isArchived: false,
+    },
+    create: {
+      teamId: team.id,
+      name: 'General',
+      slug: 'general',
+      description: 'Main team conversation channel',
+      isDefault: true,
+      isArchived: false,
+      createdBy: user1.id,
+    },
+  });
+
+  await prisma.teamChannel.upsert({
+    where: {
+      teamId_slug: {
+        teamId: team.id,
+        slug: 'announcements',
+      },
+    },
+    update: {
+      isDefault: true,
+      isArchived: false,
+    },
+    create: {
+      teamId: team.id,
+      name: 'Announcements',
+      slug: 'announcements',
+      description: 'Important updates from team admins',
+      isDefault: true,
+      isArchived: false,
+      createdBy: user1.id,
+    },
+  });
+
+  console.log('✅ Seeded default team channels');
+
+  const sampleWorkout = await prisma.workout.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000006' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-000000000006',
+      teamId: team.id,
+      createdBy: user1.id,
+      title: 'Evening Cardio Session',
+      description: '40-minute cardio workout with moderate intensity.',
+      type: WorkoutType.CARDIO,
+      scheduledDate: new Date(),
+      durationMinutes: 40,
+      caloriesTarget: 450,
+    },
+  });
+
+  await prisma.workoutLog.upsert({
+    where: {
+      workoutId_userId: {
+        workoutId: sampleWorkout.id,
+        userId: user2.id,
+      },
+    },
+    update: {},
+    create: {
+      workoutId: sampleWorkout.id,
+      userId: user2.id,
+      status: WorkoutLogStatus.COMPLETED,
+      durationMinutes: 42,
+      caloriesBurned: 470,
+      distanceMeters: 6200,
+      notes: 'Felt strong all session.',
+    },
+  });
+
+  await prisma.workoutLog.upsert({
+    where: {
+      workoutId_userId: {
+        workoutId: sampleWorkout.id,
+        userId: user3.id,
+      },
+    },
+    update: {},
+    create: {
+      workoutId: sampleWorkout.id,
+      userId: user3.id,
+      status: WorkoutLogStatus.PARTIAL,
+      durationMinutes: 25,
+      caloriesBurned: 290,
+      distanceMeters: 3500,
+      notes: 'Stopped early due to schedule.',
+    },
+  });
+
+  console.log('✅ Seeded workout foundation data');
 
   // Create team chat
   await prisma.chat.upsert({
@@ -242,4 +530,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-

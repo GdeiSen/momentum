@@ -12,6 +12,7 @@ import { ChatsModule } from './modules/chats/chats.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { UserSettingsModule } from './modules/user-settings/user-settings.module';
 import { AiChatModule } from './modules/ai-chat/ai-chat.module';
+import { WorkoutsModule } from './modules/workouts/workouts.module';
 
 @Module({
   imports: [
@@ -30,7 +31,7 @@ import { AiChatModule } from './modules/ai-chat/ai-chat.module';
     StorageModule,
     UserSettingsModule,
     AiChatModule,
+    WorkoutsModule,
   ],
 })
 export class AppModule {}
-

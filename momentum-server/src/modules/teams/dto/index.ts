@@ -4,4 +4,9 @@ export * from './update-member-role.dto';
 export * from './transfer-ownership.dto';
 export * from './team-invite.dto';
 export * from './team-whitelist.dto';
-
+export * from './create-role-template.dto';
+export * from './update-role-template.dto';
+export * from './assign-role-template.dto';
+export * from './create-team-channel.dto';
+export * from './update-team-channel.dto';
+export * from './create-team-channel-message.dto';
